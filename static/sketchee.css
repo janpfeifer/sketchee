@@ -1,0 +1,27 @@
+body {
+    background-color: #0E1216;
+    color: navajowhite;
+}
+
+.box {
+    position:absolute;
+    top:8px;
+    right:8px;
+    bottom:8px;
+    left:8px;
+}
+
+.title {
+    color: #ffff80;
+    font-size:x-large;
+    font-family: "Trebuchet MS", Helvetica, sans-serif;
+}
+
+.sketch {
+    background-color: whitesmoke;
+    color: black;
+    border: #33331A 3pt solid;
+    border-radius: 8pt;
+    width: 100%;
+    height: 100%;
+}

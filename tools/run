@@ -1,0 +1,169 @@
+#!/bin/bash
+export SKETCHEE_ROOT="${SKETCHEE_ROOT:-${HOME}/Projects/Sketchee}"
+
+# In case it's not set.
+export GOBIN="${GOBIN:-${GOPATH}/bin}"
+
+FILESYSTEM_ERROR=100
+
+# Builds sketchee server. Since it's a module, not necessarily in
+# GOPATH, we must change directories first.
+function server() {
+  (
+    set -x
+    cd "${SKETCHEE_ROOT}/server" || exit $FILESYSTEM_ERROR
+    go build -o "${GOBIN}/sketchee" sketchee/server
+  )
+}
+
+# Builds and then runs Sketchee's server.
+function run() {
+  vmodule="${1}"
+  shift
+  server()
+  (
+    set -x
+    sketchee -port=9241 -static="${SKETCHEE_CLIENT}" --logtostderr \
+      --vmodule="${vmodule}" "${@}"
+  )
+}
+
+function wasm() {
+  pushd "${SKETCHEE_ROOT}/wasm" || exit $FILESYSTEM_ERROR
+  (
+    if [[ ! -e "${SKETCHEE_ROOT}/static/wasm_exec.js" ]] ; then
+      set -x
+      cp "${GOROOT}/misc/wasm/wasm_exec.js" "${SKETCHEE_ROOT}/static/"
+    fi
+    set -x
+    GOOS=js GOARCH=wasm go build -o "${SKETCHEE_ROOT}/static/main.wasm"
+  )
+  popd || exit $FILESYSTEM_ERROR
+}
+
+# Builds browser URL, and try to open the browser with it.
+function browser() {
+  # All parameters described in SKETCHEE/wasm/js/params.go.
+  # Default values.
+  declare -A parameters=(
+    ["vmodule"]=""
+  )
+
+  # Update with values given.
+  dry_run=""
+  for ii in "$@"; do
+    if [[ "${ii}" == "-d" || "${ii}" == "--dry_run" ]] ; then
+      dry_run="1"
+      continue
+    fi
+    if [[ ! "${ii}" == *"="* ]] ; then
+      echo "Parameter setting missing \"=\" in \"${ii}\"" 1>&2
+      return 1
+    fi
+    read -r key value < <(echo "${ii/=/ }")
+    parameters["${key}"]="${value}"
+  done
+
+  # Build URL and print-out selected values.
+  url="http://localhost:9241/sketchee.html"
+  printf "Opening browser:\n  URL: %s\n" "${url}"
+  sep="?"
+  for key in "${!parameters[@]}"; do
+    value="${parameters[$key]}"
+    if [[ "${value}" == "" ]]; then
+      printf "  ... skipping %s\n" "${key}"
+      continue
+    fi
+    printf "  %s=\"%s\"\n" "${key}" "${value}"
+    url="${url}${sep}${key}=${value}"
+    sep="&"
+  done
+
+  if [[ "${dry_run}" ]] ; then
+    echo "${url}"
+  else
+   (set -x && xdg-open "${url}")
+  fi
+}
+
+function deps() {
+  if ! hash dot >& /dev/null ; then
+    echo "Please install GraphViz (for 'dot' program)."
+    echo "In Debian/Ubuntu derived systems try: $ apt install graphviz"
+    exit
+  fi
+  if ! hash godepgraph >& /dev/null ; then
+    echo "Please install godepgraph, from https://github.com/kisielk/godepgraph"
+    echo "Try this: $ go install github.com/kisielk/godepgraph"
+    exit
+  fi
+  (
+    set -x
+    cd "${SKETCHEE_ROOT}" || exit
+    IGNORE_PREFIXES="github.com,google.golang.org,nhooyr.io"
+    godepgraph -s -p "${IGNORE_PREFIXES}" "sketchee/server" > "/tmp/sketchee_server_dep.dot" \
+      && dot -Tpng -o "${SKETCHEE_ROOT}/server_dep_graph.png" < "/tmp/sketchee_server_dep.dot" \
+      && eog "${SKETCHEE_ROOT}/server_dep_graph.png" >& /dev/null &
+    GOOS=js GOARCH=wasm godepgraph -s -p "${IGNORE_PREFIXES}" sketchee/wasm > /tmp/sketchee_wasm_dep.dot \
+      && dot -Tpng -o "${SKETCHEE_ROOT}/wasm_dep_graph.png" < /tmp/sketchee_wasm_dep.dot \
+      && eog "${SKETCHEE_ROOT}/wasm_dep_graph.png" >& /dev/null &
+  )
+}
+
+# Generate the various automatically generated code.
+function generate() {
+  (
+    set -x
+    cd "${SKETCHEE_ROOT}" || exit $FILESYSTEM_ERROR
+    go generate ./...
+  )
+}
+
+function count() {
+  (
+    set -x
+    cd "${SKETCHEE_ROOT}" || exit $FILESYSTEM_ERROR
+    find . -type f \
+      | grep -v '.gitignore' \
+      | grep -v '_string.go' \
+      | grep -v 'go.mod' | grep -v 'go.sum' \
+      | xargs wc -l
+  )
+}
+
+function main() {
+  cmd="$1"
+  shift
+
+  if [[ "${cmd}" == "run" ]]; then
+    echo "Build and run Sketchee. SKETCHEE_ROOT=${SKETCHEE_ROOT}"
+    (server && run "$@") || exit 1
+  elif [[ "${cmd}" == "server" ]]; then
+    server || exit 1
+  elif [[ "${cmd}" == "wasm" ]]; then
+    (wasm && exit 0) || exit 1
+  elif [[ "${cmd}" == "browser" ]]; then
+    (browser "$@") || exit 1
+  elif [[ "${cmd}" == "deps" ]]; then
+    deps || exit 1
+  elif [[ "${cmd}" == "generate" ]]; then
+    generate || exit 1
+  elif [[ "${cmd}" == "count" ]]; then
+    count || exit 1
+  elif [[ "${cmd}" == "complete" ]]; then
+    # For bash auto-complete
+    echo "run server wasm browser deps generate count"
+  else
+    printf "Unknown command \"%s\". Valid values:
+	run - Builds and runs server.
+	server - Builds server.
+	wasm - Rebuilds WASM code.
+	browser - Open browser with given parameters.
+	deps - Build dependency plots (PNG) and display them.
+	generate - Build all automatically generated files.
+	count - Count number of lines in code.
+	\n" "${cmd}" 1>&2
+  fi
+}
+
+main "${@}"
